@@ -23,7 +23,7 @@
     ],
     // Use 'postCreateCommand' to run commands after the container is created.
     // Install app dependencies.
-    "postCreateCommand": "pip3 install --user -r requirements.txt",
+    "postCreateCommand": "pip3 install --user -r requirements.txt && sudo apt-get update && sudo apt-get install -y libgl1-mesa-glx",
     // Use 'postAttachCommand' to run commands after a tool has attached to the container.
     // Start the app.
     "postAttachCommand": {
