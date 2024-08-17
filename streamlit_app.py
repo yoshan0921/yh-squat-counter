@@ -15,11 +15,16 @@ class SquatCounter:
         self.success_count = 0
         self.up = False
         self.down = False
-        self.hip_knee_footindex_angle = 0.0
-        self.shoulder_knee_ankle_angle = 0.0
+        self.shoulder_hip_ankle_angle = 0
+        self.shoulder_knee_footindex_angle = 0
+        self.hip_knee_footindex_angle = 0
 
     def process_pose(self, landmarks):
         # Get the coordinates of the observation body point.
+        left_shoulder = [
+            landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
+            landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y,
+        ]
         left_knee = [
             landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x,
             landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y,
@@ -27,10 +32,6 @@ class SquatCounter:
         left_hip = [
             landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x,
             landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y,
-        ]
-        left_shoulder = [
-            landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
-            landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y,
         ]
         left_ankle = [
             landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x,
@@ -42,26 +43,30 @@ class SquatCounter:
         ]
 
         # Calculate angles.
-        self.shoulder_knee_ankle_angle = self.calculate_angle(
-            left_shoulder, left_knee, left_ankle
+        self.shoulder_hip_ankle_angle = self.calculate_angle(
+            left_shoulder, left_hip, left_ankle
+        )
+        self.shoulder_knee_footindex_angle = self.calculate_angle(
+            left_shoulder, left_knee, left_footindex
         )
         self.hip_knee_footindex_angle = self.calculate_angle(
             left_hip, left_knee, left_footindex
         )
 
         # Count squats if posture is correct.
-        if 170 < self.shoulder_knee_ankle_angle < 180:
+        if 170 < self.shoulder_hip_ankle_angle < 180:
             self.up = True
-        if self.up and 80 < self.hip_knee_footindex_angle < 100:
+        if self.up and 80 < self.hip_knee_footindex_angle < 100 and 170 < self.shoulder_knee_footindex_angle < 180:
             self.down = True
-        if self.down and 170 < self.shoulder_knee_ankle_angle < 180:
+        if self.down and 170 < self.shoulder_hip_ankle_angle < 180:
             self.success_count += 1
             self.up = False
             self.down = False
 
         return (
             self.success_count,
-            self.shoulder_knee_ankle_angle,
+            self.shoulder_hip_ankle_angle,
+            self.shoulder_knee_footindex_angle,
             self.hip_knee_footindex_angle,
         )
 
@@ -86,6 +91,7 @@ class VideoProcessor(VideoProcessorBase):
     def __init__(self):
         self.pose = mp_pose.Pose()
         self.squat_counter = SquatCounter()
+        self.message_timestamp = None
 
     # Each time the WebRTC stream receives a frame, the recv method is called.
     # The received frame is passed as the frame parameter.
@@ -102,9 +108,12 @@ class VideoProcessor(VideoProcessorBase):
 
         # Checks to see if a pose landmark has been detected.
         if results.pose_landmarks:
+            # Retrieve a list containing all detected posed landmarks
+            landmarks = results.pose_landmarks.landmark
+
             # Update the squat count using the detected pose landmarks.
-            success_count, hip_knee_footindex_angle, shoulder_knee_ankle_angle = (
-                self.squat_counter.process_pose(results.pose_landmarks.landmark)
+            success_count, shoulder_hip_ankle_angle, shoulder_knee_footindex_angle, hip_knee_footindex_angle = (
+                self.squat_counter.process_pose(landmarks)
             )
 
             # Draw the detected pose landmarks on the image.
@@ -113,13 +122,33 @@ class VideoProcessor(VideoProcessorBase):
                 img, results.pose_landmarks, mp_pose.POSE_CONNECTIONS
             )
 
-            # Draw text on the image
-            # cv2.putText(img, f'Success: {success_count}', (10, 30),
-            #             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-            # cv2.putText(img, f'Hip-Knee-Foot Index Angle: {hip_knee_footindex_angle:.2f}', (10, 110),
-            #             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-            # cv2.putText(img, f'Shoulder-Knee-Ankle Angle: {shoulder_knee_ankle_angle:.2f}', (10, 150),
-            #             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+            # Display angles near the corresponding joints
+            left_knee_x = int(
+                landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x * img.shape[1])
+            left_knee_y = int(
+                landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y * img.shape[0])
+            cv2.putText(img, f'{int(hip_knee_footindex_angle)}', (left_knee_x, left_knee_y - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (103, 51, 246), 2, cv2.LINE_AA)
+
+            # Display the position/posture status (values of self.up and self.down)
+            if self.squat_counter.up and not self.squat_counter.down:
+                cv2.putText(img, 'Standing Position', (10, 25),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+            elif self.squat_counter.down:
+                cv2.putText(img, 'Squatting Position', (10, 25),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2, cv2.LINE_AA)
+
+            # Display the "Nice! Squat Counted" message for 0.5 seconds
+            if not self.squat_counter.up and not self.squat_counter.down:
+                self.message_timestamp = time.time()
+                cv2.putText(img, 'Nice! Squat Counted', (10, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (103, 51, 246), 2, cv2.LINE_AA)
+
+            if self.message_timestamp and time.time() - self.message_timestamp < 0.5:
+                cv2.putText(img, 'Nice! Squat Counted', (10, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (103, 51, 246), 2, cv2.LINE_AA)
+            else:
+                self.message_timestamp = None
 
         return frame.from_ndarray(img, format="bgr24")
 
@@ -128,10 +157,11 @@ def main():
     st.title("Squat Counter with MediaPipe")
 
     # Display counters
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     success_placeholder = col1.empty()
-    hip_knee_footindex_angle_placeholder = col2.empty()
-    shoulder_knee_ankle_angle_placeholder = col3.empty()
+    shoulder_hip_ankle_angle_placeholder = col2.empty()
+    hip_knee_footindex_angle_placeholder = col3.empty()
+    shoulder_knee_footindex_angle_placeholder = col4.empty()
 
     # Start WebRTC stream
     webrtc_ctx = webrtc_streamer(
@@ -154,19 +184,25 @@ def main():
     while webrtc_ctx.state.playing:
         if webrtc_ctx.video_processor:
             success_count = webrtc_ctx.video_processor.squat_counter.success_count
+            shoulder_hip_ankle_angle = (
+                webrtc_ctx.video_processor.squat_counter.shoulder_hip_ankle_angle
+            )
             hip_knee_footindex_angle = (
                 webrtc_ctx.video_processor.squat_counter.hip_knee_footindex_angle
             )
-            shoulder_knee_ankle_angle = (
-                webrtc_ctx.video_processor.squat_counter.shoulder_knee_ankle_angle
+            shoulder_knee_footindex_angle = (
+                webrtc_ctx.video_processor.squat_counter.shoulder_knee_footindex_angle
             )
 
             success_placeholder.metric(label="Count", value=success_count)
+            shoulder_hip_ankle_angle_placeholder.metric(
+                label="Shoulder-Hip-Ankle Angle", value=shoulder_hip_ankle_angle
+            )
             hip_knee_footindex_angle_placeholder.metric(
                 label="Hip-Knee-Foot Index Angle", value=hip_knee_footindex_angle
             )
-            shoulder_knee_ankle_angle_placeholder.metric(
-                label="Shoulder-Knee-Ankle Angle", value=shoulder_knee_ankle_angle
+            shoulder_knee_footindex_angle_placeholder.metric(
+                label="Shoulder-Knee-Foot Index Angle", value=shoulder_knee_footindex_angle
             )
 
         time.sleep(0.1)
